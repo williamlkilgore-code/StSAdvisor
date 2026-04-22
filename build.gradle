@@ -1,0 +1,26 @@
+plugins {
+    id 'java'
+}
+
+group = 'sts.advisor'
+version = '1.0.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+def stsDir = System.getenv('HOME') + '/.steam/steam/steamapps/common/SlayTheSpire'
+def workshopDir = System.getenv('HOME') + '/.steam/steam/steamapps/workshop/content/646570'
+
+dependencies {
+    compileOnly fileTree(dir: stsDir, include: ['*.jar'])
+    compileOnly fileTree(dir: workshopDir + '/1605833019', include: ['*.jar'])
+    compileOnly fileTree(dir: workshopDir + '/1605060445', include: ['*.jar'])
+}
+
+jar {
+    manifest {
+        attributes('Manifest-Version': '1.0')
+    }
+}

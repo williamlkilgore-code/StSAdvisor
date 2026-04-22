@@ -1,0 +1,10 @@
+{
+  "modid": "stsadvisor",
+  "name": "STS Advisor",
+  "author_list": ["keyu"],
+  "description": "In-game advisor for cards, relics, and map paths",
+  "version": "1.0.0",
+  "sts_version": "12-22-2020",
+  "mts_version": "3.30.0",
+  "dependencies": ["basemod"]
+}
