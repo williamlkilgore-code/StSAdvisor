@@ -3,21 +3,30 @@ package sts.advisor;
 import basemod.BaseMod;
 import basemod.interfaces.PostRenderSubscriber;
 import basemod.interfaces.PostInitializeSubscriber;
+import basemod.interfaces.PostCreateShopRelicSubscriber;
 import com.badlogic.gdx.graphics.Color;
+import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.megacrit.cardcrawl.cards.AbstractCard;
 import com.megacrit.cardcrawl.core.Settings;
 import com.megacrit.cardcrawl.dungeons.AbstractDungeon;
 import com.megacrit.cardcrawl.helpers.FontHelper;
 import com.megacrit.cardcrawl.helpers.ImageMaster;
 import com.megacrit.cardcrawl.map.MapRoomNode;
+import com.megacrit.cardcrawl.shop.ShopScreen;
+import com.megacrit.cardcrawl.shop.StoreRelic;
 import com.evacipated.cardcrawl.modthespire.lib.SpireInitializer;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @SpireInitializer
-public class STSAdvisorMod implements PostInitializeSubscriber, PostRenderSubscriber {
+public class STSAdvisorMod implements PostInitializeSubscriber,
+                                      PostRenderSubscriber,
+                                      PostCreateShopRelicSubscriber {
 
     private static final Color COLOR_S     = new Color(1.0f,  0.84f, 0.0f,  1.0f);
     private static final Color COLOR_A     = new Color(0.78f, 0.66f, 0.43f, 1.0f);
@@ -47,12 +56,154 @@ public class STSAdvisorMod implements PostInitializeSubscriber, PostRenderSubscr
     }
 
     @Override
+    public void receiveCreateShopRelics(ArrayList<StoreRelic> relics, ShopScreen screen) {
+        ShopAdvisor.cacheRelics(relics);
+    }
+
+    @Override
     public void receivePostRender(SpriteBatch sb) {
         if (AbstractDungeon.screen == AbstractDungeon.CurrentScreen.CARD_REWARD) {
             renderCardReward(sb);
         } else if (AbstractDungeon.screen == AbstractDungeon.CurrentScreen.MAP) {
             renderMap(sb);
+        } else if (AbstractDungeon.screen == AbstractDungeon.CurrentScreen.SHOP) {
+            renderShop(sb);
         }
+    }
+
+    private void renderShop(SpriteBatch sb) {
+        ShopScreen shop = AbstractDungeon.shopScreen;
+        if (shop == null) return;
+
+        float s = Settings.scale;
+
+        // ── Score shop cards ──────────────────────────────────────────────────
+        List<AbstractCard> allCards = new ArrayList<>();
+        if (shop.coloredCards != null)   allCards.addAll(shop.coloredCards);
+        if (shop.colorlessCards != null) allCards.addAll(shop.colorlessCards);
+
+        for (AbstractCard card : allCards) {
+            if (card.hb == null) continue;
+            if (card.hb.cX < -1000 || card.hb.cY < -1000) continue;
+
+            AdvisorResult result = CardScorer.score(card);
+            renderShopCardBadge(sb, card, result, s);
+        }
+
+        // ── Score relics ──────────────────────────────────────────────────────
+        for (StoreRelic sr : ShopAdvisor.getCachedRelics()) {
+            if (sr.isPurchased) continue;
+            if (sr.relic == null || sr.relic.hb == null) continue;
+            if (sr.relic.hb.cX < -1000 || sr.relic.hb.cY < -1000) continue;
+
+            ShopAdvisor.RelicAdvice advice = ShopAdvisor.scoreRelic(sr);
+            renderShopRelicBadge(sb, sr, advice, s);
+        }
+
+        // ── Card removal recommendation ───────────────────────────────────────
+        if (shop.purgeAvailable) {
+            ShopAdvisor.RemovalAdvice removal = ShopAdvisor.scoreRemoval();
+            renderRemovalAdvice(sb, removal, s);
+        }
+    }
+
+    private void renderShopCardBadge(SpriteBatch sb, AbstractCard card,
+                                      AdvisorResult result, float s) {
+        float cx = card.hb.cX;
+        float cy = card.hb.cY + card.hb.height / 2f + 8f * s;
+
+        float bW = 90f * s;
+        float bH = 26f * s;
+        float bX = cx - bW / 2f;
+
+        Color tierColor = getTierColor(result.tier);
+        drawRect(sb, bX, cy, bW, bH, tierColor);
+
+        // Tier letter
+        FontHelper.renderFontCentered(sb, FontHelper.buttonLabelFont,
+            result.tier, bX + 12f * s, cy + bH / 2f + 6f * s,
+            COLOR_TEXT, FONT_SCALE_SMALL);
+
+        // Score + synergy bonus
+        String scoreText = result.baseScore
+            + (result.synergyBonus > 0 ? " +" + result.synergyBonus
+               : result.synergyBonus < 0 ? " " + result.synergyBonus : "");
+        FontHelper.renderFontCentered(sb, FontHelper.buttonLabelFont,
+            scoreText, bX + bW * 0.65f, cy + bH / 2f + 6f * s,
+            COLOR_TEXT, FONT_SCALE_SMALL);
+
+        // Recommendation pill
+        Color recColor = getRecColor(result.recommendation);
+        float rW = 70f * s, rH = 18f * s;
+        float rY = cy - rH - 2f * s;
+        drawRect(sb, cx - rW / 2f, rY, rW, rH, recColor);
+        FontHelper.renderFontCentered(sb, FontHelper.buttonLabelFont,
+            result.recommendation, cx, rY + rH / 2f + 5f * s,
+            COLOR_TEXT, FONT_SCALE_TINY);
+    }
+
+    private void renderShopRelicBadge(SpriteBatch sb, StoreRelic sr,
+                                       ShopAdvisor.RelicAdvice advice, float s) {
+        float cx = sr.relic.hb.cX;
+        // Place badge well above the relic icon
+        float cy = sr.relic.hb.cY + sr.relic.hb.height * 0.5f + 30f * s;
+
+        float bW = 80f * s;
+        float bH = 24f * s;
+        float bX = cx - bW / 2f;
+
+        Color tierColor = getTierColor(advice.tier());
+        // Dim if can't afford
+        if (!advice.canAfford) tierColor = new Color(
+            tierColor.r * 0.5f, tierColor.g * 0.5f, tierColor.b * 0.5f, 0.7f);
+
+        drawRect(sb, bX, cy, bW, bH, tierColor);
+
+        FontHelper.renderFontCentered(sb, FontHelper.buttonLabelFont,
+            advice.tier() + "  " + advice.score,
+            cx, cy + bH / 2f + 6f * s,
+            COLOR_TEXT, FONT_SCALE_SMALL);
+
+        // Buy/Skip pill
+        Color recColor = advice.recommendation.equals("Buy") ? COLOR_TAKE
+                       : advice.recommendation.equals("Consider") ? COLOR_CONS
+                       : COLOR_SKIP;
+        if (!advice.canAfford) recColor = new Color(0.4f, 0.4f, 0.4f, 0.8f);
+
+        float rW = 65f * s, rH = 18f * s;
+        float rY = cy - rH - 2f * s;
+        drawRect(sb, cx - rW / 2f, rY, rW, rH, recColor);
+        FontHelper.renderFontCentered(sb, FontHelper.buttonLabelFont,
+            advice.canAfford ? advice.recommendation : "Can't afford",
+            cx, rY + rH / 2f + 5f * s, COLOR_TEXT, FONT_SCALE_TINY);
+    }
+
+    private void renderRemovalAdvice(SpriteBatch sb, ShopAdvisor.RemovalAdvice advice,
+                                      float s) {
+        if (advice.reason.isEmpty()) return;
+
+        ShopScreen shop = AbstractDungeon.shopScreen;
+        if (shop == null || shop.confirmButton == null || shop.confirmButton.hb == null) return;
+
+        // Position above the Card Removal Service confirm button
+        float cx = shop.confirmButton.hb.cX;
+        float cy = shop.confirmButton.hb.cY + shop.confirmButton.hb.height / 2f + 8f * s;
+
+        float bW = 260f * s;
+        float bH = 26f  * s;
+        float bX = cx - bW / 2f;
+
+        Color bg = advice.shouldRemove
+            ? new Color(0.3f, 0.5f, 0.2f, 0.92f)
+            : COLOR_BG;
+        Color fg = advice.shouldRemove ? new Color(0.7f, 1.0f, 0.5f, 1.0f) : COLOR_LIGHT;
+
+        drawRect(sb, bX, cy, bW, bH, bg);
+        if (advice.shouldRemove) drawRectOutline(sb, bX, cy, bW, bH, COLOR_TAKE);
+
+        FontHelper.renderFontCentered(sb, FontHelper.buttonLabelFont,
+            advice.reason + "  (" + advice.cost + "g)",
+            cx, cy + bH / 2f + 6f * s, fg, FONT_SCALE_TINY);
     }
 
     private void renderCardReward(SpriteBatch sb) {
@@ -69,81 +220,113 @@ public class STSAdvisorMod implements PostInitializeSubscriber, PostRenderSubscr
         }
     }
 
+    // ShapeRenderer for drawing path lines
+    private com.badlogic.gdx.graphics.glutils.ShapeRenderer shapeRenderer;
+
+    private com.badlogic.gdx.graphics.glutils.ShapeRenderer getShapeRenderer() {
+        if (shapeRenderer == null) {
+            shapeRenderer = new com.badlogic.gdx.graphics.glutils.ShapeRenderer();
+        }
+        return shapeRenderer;
+    }
+
+    private static final Color PATH_GOLD   = new Color(1.0f,  0.80f, 0.0f,  0.85f);
+    private static final Color PATH_SILVER = new Color(0.70f, 0.70f, 0.75f, 0.65f);
+    private static final float PATH_WIDTH  = 6f;
+
     private void renderMap(SpriteBatch sb) {
         if (!MapAdvisor.hasChoice()) return;
         List<MapAdvisor.ScoredPath> paths = MapAdvisor.advise();
         if (paths.isEmpty()) return;
 
-        float s = Settings.scale;
+        Map<String, com.megacrit.cardcrawl.map.MapRoomNode> lookup = buildMapLookup();
 
-        for (int i = 0; i < Math.min(paths.size(), 3); i++) {
-            MapAdvisor.ScoredPath path = paths.get(i);
-            MapRoomNode start = path.startNode();
-            if (start == null || start.hb == null) continue;
-            if (start.hb.cX < -1000 || start.hb.cY < -1000) continue;
-            renderPathBadge(sb, path, i, paths.size());
+        // End SpriteBatch — ShapeRenderer needs GL state
+        sb.end();
+
+        com.badlogic.gdx.graphics.glutils.ShapeRenderer sr = getShapeRenderer();
+        com.badlogic.gdx.Gdx.gl.glEnable(com.badlogic.gdx.graphics.GL20.GL_BLEND);
+        com.badlogic.gdx.Gdx.gl.glBlendFunc(
+            com.badlogic.gdx.graphics.GL20.GL_SRC_ALPHA,
+            com.badlogic.gdx.graphics.GL20.GL_ONE_MINUS_SRC_ALPHA);
+
+        sr.setProjectionMatrix(sb.getProjectionMatrix());
+        sr.begin(com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType.Filled);
+
+        // Draw silver (second best) first so gold draws on top
+        if (paths.size() >= 2) {
+            drawPathLines(sr, paths.get(1), PATH_SILVER, PATH_WIDTH, lookup);
+        }
+        drawPathLines(sr, paths.get(0), PATH_GOLD, PATH_WIDTH + 2f, lookup);
+
+        sr.end();
+
+        // Resume SpriteBatch
+        sb.begin();
+
+        // Draw reason text below the start node of the best path
+        MapAdvisor.ScoredPath best = paths.get(0);
+        com.megacrit.cardcrawl.map.MapRoomNode startNode = best.startNode();
+        if (startNode != null && startNode.hb != null
+                && startNode.hb.cX > -1000 && startNode.hb.cY > -1000
+                && !best.reasons.isEmpty()) {
+            float s  = Settings.scale;
+            float cx = startNode.hb.cX;
+            float cy = startNode.hb.cY;
+            String reason = truncate(best.reasons.get(0), 32);
+            float rW = 200f * s;
+            float rH = 20f  * s;
+            float rY = cy - 36f * s;
+            drawRect(sb, cx - rW / 2f, rY, rW, rH, COLOR_BG);
+            FontHelper.renderFontCentered(sb, FontHelper.buttonLabelFont,
+                reason, cx, rY + rH / 2f + 6f * s, PATH_GOLD, FONT_SCALE_TINY);
         }
     }
 
-    private void renderPathBadge(SpriteBatch sb, MapAdvisor.ScoredPath path,
-                                  int rank, int total) {
-        MapRoomNode start = path.startNode();
-        float s  = Settings.scale;
-        float cx = start.hb.cX;
-        float cy = start.hb.cY;
+    private void drawPathLines(
+            com.badlogic.gdx.graphics.glutils.ShapeRenderer sr,
+            MapAdvisor.ScoredPath path,
+            Color color, float width,
+            Map<String, com.megacrit.cardcrawl.map.MapRoomNode> lookup) {
 
-        boolean best = (rank == 0);
+        sr.setColor(color);
+        List<com.megacrit.cardcrawl.map.MapRoomNode> nodes = path.nodes;
 
-        // Badge dimensions — wider for path summary
-        float bW = 90f * s;
-        float bH = 28f * s;
-        float bX = cx - bW / 2f;
-        float bY = cy + 30f * s;
+        for (int i = 0; i < nodes.size() - 1; i++) {
+            com.megacrit.cardcrawl.map.MapRoomNode from = nodes.get(i);
+            com.megacrit.cardcrawl.map.MapRoomNode to   = nodes.get(i + 1);
 
-        // Color: gold = best, silver = second, muted = third
-        Color bgColor;
-        Color textColor;
-        if (rank == 0) {
-            bgColor   = new Color(0.55f, 0.40f, 0.0f, 0.95f);
-            textColor = COLOR_S;
-        } else if (rank == 1) {
-            bgColor   = new Color(0.18f, 0.18f, 0.22f, 0.92f);
-            textColor = new Color(0.75f, 0.75f, 0.80f, 1.0f);
-        } else {
-            bgColor   = new Color(0.12f, 0.12f, 0.14f, 0.88f);
-            textColor = new Color(0.55f, 0.55f, 0.60f, 1.0f);
+            if (from.hb == null || to.hb == null) continue;
+            if (from.hb.cX < -1000 || to.hb.cX < -1000) continue;
+
+            float x1 = from.hb.cX, y1 = from.hb.cY;
+            float x2 = to.hb.cX,   y2 = to.hb.cY;
+
+            // Draw thick line as a rectangle rotated along the edge direction
+            float dx = x2 - x1, dy = y2 - y1;
+            float len = (float) Math.sqrt(dx * dx + dy * dy);
+            if (len < 1f) continue;
+            float nx = -dy / len * width / 2f;
+            float ny =  dx / len * width / 2f;
+
+            sr.triangle(
+                x1 + nx, y1 + ny,
+                x1 - nx, y1 - ny,
+                x2 + nx, y2 + ny);
+            sr.triangle(
+                x1 - nx, y1 - ny,
+                x2 - nx, y2 - ny,
+                x2 + nx, y2 + ny);
         }
+    }
 
-        drawRect(sb, bX, bY, bW, bH, bgColor);
-        if (best) drawRectOutline(sb, bX, bY, bW, bH, COLOR_S);
-
-        // Score
-        FontHelper.renderFontCentered(sb, FontHelper.buttonLabelFont,
-            String.valueOf(path.score),
-            cx, bY + bH / 2f + 7f * s,
-            textColor, FONT_SCALE_SMALL);
-
-        // Path stats row: E:1 R:1 $:1 below score
-        String stats = "E:" + path.elites + " R:" + path.rests + " $:" + path.shops;
-        float statsY = bY - 18f * s;
-        float statsW = bW + 10f * s;
-        drawRect(sb, cx - statsW / 2f, statsY, statsW, 16f * s,
-                 new Color(0.0f, 0.0f, 0.0f, 0.75f));
-        FontHelper.renderFontCentered(sb, FontHelper.buttonLabelFont,
-            stats, cx, statsY + 12f * s,
-            textColor, FONT_SCALE_TINY);
-
-        // Top reason for best path
-        if (best && !path.reasons.isEmpty()) {
-            float rW = 180f * s;
-            float rH = 18f * s;
-            float rY = statsY - rH - 2f * s;
-            drawRect(sb, cx - rW / 2f, rY, rW, rH, COLOR_BG);
-            FontHelper.renderFontCentered(sb, FontHelper.buttonLabelFont,
-                truncate(path.reasons.get(0), 26),
-                cx, rY + rH / 2f + 5f * s,
-                COLOR_LIGHT, FONT_SCALE_TINY);
-        }
+    private Map<String, com.megacrit.cardcrawl.map.MapRoomNode> buildMapLookup() {
+        Map<String, com.megacrit.cardcrawl.map.MapRoomNode> lookup = new HashMap<>();
+        if (AbstractDungeon.map == null) return lookup;
+        for (java.util.ArrayList<com.megacrit.cardcrawl.map.MapRoomNode> row : AbstractDungeon.map)
+            for (com.megacrit.cardcrawl.map.MapRoomNode node : row)
+                if (node != null) lookup.put(node.x + "," + node.y, node);
+        return lookup;
     }
 
     private void renderCardBadge(SpriteBatch sb, AbstractCard card, AdvisorResult result) {
