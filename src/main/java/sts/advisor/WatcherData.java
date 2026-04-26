@@ -89,6 +89,19 @@ public class WatcherData {
         SCORES.put("Panacea", 40);
         SCORES.put("Transmutation", 35);
         SCORES.put("JustLucky", 30);
+        // Missing Watcher cards
+        SCORES.put("Tantrum", 68);           // attacks 3x, enters Wrath, shuffles back
+        SCORES.put("EmptyMind", 55);         // draw 2, exit stance
+        SCORES.put("Omniscience", 85);       // play next card twice — S tier
+        SCORES.put("DevaForm", 90);          // S tier — energy gain each turn
+        SCORES.put("Wireheading", 62);       // Foresight — scry 3 each turn
+        SCORES.put("Fasting2", 67);          // Fasting upgraded form
+        // Wish cards — obtained from Wish spell
+        SCORES.put("BecomeAlmighty", 75);    // gain 3 strength permanently
+        SCORES.put("FameAndFortune", 65);    // gain 30 gold
+        SCORES.put("LiveForever", 72);       // gain 5 max HP
+        // Other missing
+        SCORES.put("ConjureBlade", 65);
 
         // Upgrade bonuses
         UPGRADE_BONUS.put("LessonLearned", 10);
@@ -152,6 +165,8 @@ public class WatcherData {
         tag("WreathOfFlame",  "wrath_user", "attack");
         tag("BattleHymn",     "wrath_user");
         tag("PathToVictory",  "attack");   // Pressure Points
+        tag("Tantrum",        "wrath_enter", "stance_enter", "attack");
+        tag("Wireheading",    "scry");     // Foresight
 
         // Synergy groups
         group("Stance Cycling",  "stance_enter", "stance_change", "block_on_change",
